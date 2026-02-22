@@ -1,0 +1,230 @@
+@page "/datagrid/sql-server-binding"
+
+@using Syncfusion.Blazor
+@using Syncfusion.Blazor.Grids
+@using Syncfusion.Blazor.Data
+@using System.Collections
+@using BlazorDemos.Services
+@using Microsoft.Data.SqlClient
+
+@inject SqlQueryService SqlQueryService
+
+<SampleDescription>
+    <p>
+        This sample demonstrates how to bind a DataGrid to SQL Server using
+        <strong>SqlQueryService</strong>. The service uses parameterized queries to
+        safely read, insert, update, and delete rows via <code>Microsoft.Data.SqlClient</code>.
+    </p>
+</SampleDescription>
+
+<ActionDescription>
+    <p>
+        SQL Server data binding is achieved by injecting <strong>SqlQueryService</strong>
+        into a custom <code>DataAdaptor</code> and implementing the
+        <code>ReadAsync</code>, <code>InsertAsync</code>, <code>UpdateAsync</code>, and
+        <code>RemoveAsync</code> methods.
+    </p>
+    <p>
+        The connection string is read from <code>appsettings.json</code> under
+        <code>ConnectionStrings:SqlServer</code>. Update that value to point to your
+        SQL Server instance and database before running the app.
+    </p>
+    <p>
+        <strong>Schema expected on SQL Server:</strong>
+    </p>
+    <pre>
+CREATE TABLE Orders (
+    OrderID    INT           PRIMARY KEY IDENTITY,
+    CustomerID NVARCHAR(5)   NOT NULL,
+    Freight    DECIMAL(18,2) NOT NULL,
+    OrderDate  DATE          NOT NULL,
+    ShipCountry NVARCHAR(50) NOT NULL
+);
+    </pre>
+</ActionDescription>
+
+<div class="col-lg-12 control-section">
+    <div class="content-wrapper">
+        <div class="row">
+            <SfGrid TValue="Order"
+                    AllowPaging="true"
+                    AllowSorting="true"
+                    Toolbar="@(new string[] { "Add", "Edit", "Delete", "Update", "Cancel" })">
+                <SfDataManager AdaptorInstance="@typeof(SqlServerAdaptor)"
+                               Adaptor="Adaptors.CustomAdaptor" />
+                <GridEditSettings AllowAdding="true"
+                                  AllowEditing="true"
+                                  AllowDeleting="true"
+                                  Mode="EditMode.Normal" />
+                <GridColumns>
+                    <GridColumn Field=@nameof(Order.OrderID)
+                                HeaderText="Order ID"
+                                IsPrimaryKey="true"
+                                IsIdentity="true"
+                                TextAlign="TextAlign.Right"
+                                Width="120" />
+                    <GridColumn Field=@nameof(Order.CustomerID)
+                                HeaderText="Customer"
+                                Width="140"
+                                ValidationRules="@(new ValidationRules { Required = true, MaxLength = 5 })" />
+                    <GridColumn Field=@nameof(Order.Freight)
+                                HeaderText="Freight"
+                                Format="C2"
+                                TextAlign="TextAlign.Right"
+                                EditType="EditType.NumericEdit"
+                                Width="130"
+                                ValidationRules="@(new ValidationRules { Required = true, Range = new double[] { 0, 10000 } })" />
+                    <GridColumn Field=@nameof(Order.OrderDate)
+                                HeaderText="Order Date"
+                                Format="d"
+                                Type="ColumnType.Date"
+                                EditType="EditType.DatePickerEdit"
+                                TextAlign="TextAlign.Right"
+                                Width="150"
+                                ValidationRules="@(new ValidationRules { Required = true })" />
+                    <GridColumn Field=@nameof(Order.ShipCountry)
+                                HeaderText="Ship Country"
+                                EditType="EditType.DropDownEdit"
+                                Width="150" />
+                </GridColumns>
+            </SfGrid>
+        </div>
+    </div>
+</div>
+
+@code {
+    // ---------------------------------------------------------------------------
+    // Data model
+    // ---------------------------------------------------------------------------
+    public class Order
+    {
+        public int      OrderID     { get; set; }
+        public string   CustomerID  { get; set; }
+        public decimal  Freight     { get; set; }
+        public DateTime OrderDate   { get; set; }
+        public string   ShipCountry { get; set; }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Custom adaptor that talks to SQL Server via SqlQueryService
+    // ---------------------------------------------------------------------------
+    public class SqlServerAdaptor : DataAdaptor
+    {
+        [Inject]
+        public SqlQueryService SqlQueryService { get; set; }
+
+        // ------------------------------------------------------------------
+        // READ – supports paging and sorting pushed down to SQL Server
+        // ------------------------------------------------------------------
+        public override async Task<object> ReadAsync(
+            DataManagerRequest dm, string key = null)
+        {
+            // Build a simple paged query.
+            // For production use, push sorting/filtering into SQL as well.
+            const string countSql = "SELECT COUNT(*) FROM Orders";
+            int totalCount = Convert.ToInt32(
+                await SqlQueryService.ExecuteScalarAsync(countSql));
+
+            int skip = dm.Skip;
+            int take = dm.Take > 0 ? dm.Take : 10;
+
+            const string dataSql = @"
+                SELECT OrderID, CustomerID, Freight, OrderDate, ShipCountry
+                FROM   Orders
+                ORDER  BY OrderID
+                OFFSET @Skip ROWS
+                FETCH  NEXT @Take ROWS ONLY";
+
+            var parameters = new[]
+            {
+                new SqlParameter("@Skip", skip),
+                new SqlParameter("@Take", take)
+            };
+
+            var table  = await SqlQueryService.ExecuteQueryAsync(dataSql, parameters);
+            var orders = new List<Order>();
+
+            foreach (System.Data.DataRow row in table.Rows)
+            {
+                orders.Add(new Order
+                {
+                    OrderID     = Convert.ToInt32(row["OrderID"]),
+                    CustomerID  = row["CustomerID"].ToString(),
+                    Freight     = Convert.ToDecimal(row["Freight"]),
+                    OrderDate   = Convert.ToDateTime(row["OrderDate"]),
+                    ShipCountry = row["ShipCountry"].ToString()
+                });
+            }
+
+            return dm.RequiresCounts
+                ? new DataResult { Result = orders, Count = totalCount }
+                : (object)orders;
+        }
+
+        // ------------------------------------------------------------------
+        // INSERT
+        // ------------------------------------------------------------------
+        public override async Task<object> InsertAsync(
+            DataManager dm, object value, string key)
+        {
+            var order = (Order)value;
+            const string sql = @"
+                INSERT INTO Orders (CustomerID, Freight, OrderDate, ShipCountry)
+                VALUES (@CustomerID, @Freight, @OrderDate, @ShipCountry);
+                SELECT SCOPE_IDENTITY();";
+
+            var parameters = new[]
+            {
+                new SqlParameter("@CustomerID",  order.CustomerID),
+                new SqlParameter("@Freight",     order.Freight),
+                new SqlParameter("@OrderDate",   order.OrderDate),
+                new SqlParameter("@ShipCountry", order.ShipCountry)
+            };
+
+            var newId = await SqlQueryService.ExecuteScalarAsync(sql, parameters);
+            order.OrderID = Convert.ToInt32(newId);
+            return order;
+        }
+
+        // ------------------------------------------------------------------
+        // UPDATE
+        // ------------------------------------------------------------------
+        public override async Task<object> UpdateAsync(
+            DataManager dm, object value, string keyField, string key)
+        {
+            var order = (Order)value;
+            const string sql = @"
+                UPDATE Orders
+                SET    CustomerID  = @CustomerID,
+                       Freight     = @Freight,
+                       OrderDate   = @OrderDate,
+                       ShipCountry = @ShipCountry
+                WHERE  OrderID = @OrderID";
+
+            var parameters = new[]
+            {
+                new SqlParameter("@OrderID",     order.OrderID),
+                new SqlParameter("@CustomerID",  order.CustomerID),
+                new SqlParameter("@Freight",     order.Freight),
+                new SqlParameter("@OrderDate",   order.OrderDate),
+                new SqlParameter("@ShipCountry", order.ShipCountry)
+            };
+
+            await SqlQueryService.ExecuteNonQueryAsync(sql, parameters);
+            return order;
+        }
+
+        // ------------------------------------------------------------------
+        // DELETE
+        // ------------------------------------------------------------------
+        public override async Task<object> RemoveAsync(
+            DataManager dm, object value, string keyField, string key)
+        {
+            int orderId = Convert.ToInt32(value);
+            const string sql = "DELETE FROM Orders WHERE OrderID = @OrderID";
+            var parameters = new[] { new SqlParameter("@OrderID", orderId) };
+            await SqlQueryService.ExecuteNonQueryAsync(sql, parameters);
+            return value;
+        }
+    }
+}

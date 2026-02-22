@@ -3,6 +3,7 @@ using Syncfusion.Blazor;
 using Syncfusion.Licensing;
 using System.Globalization;
 using BlazorDemos.Shared;
+using BlazorDemos.Services;
 using System.Collections.Generic;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -70,6 +71,7 @@ namespace BlazorDemos
             // });
 #endif
             services.AddScoped<SampleService>();
+            services.AddScoped<SqlQueryService>();
         }
 
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
